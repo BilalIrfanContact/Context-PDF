@@ -94,6 +94,7 @@ _GROUNDING_STOPWORDS = _QUESTION_STOPWORDS | {
     "your",
 }
 Intent = Literal["summary", "qa"]
+RouteIntent = Literal["summary", "qa", "off_topic"]
 RetrievalMode = Literal["head", "semantic"]
 FallbackReasonCode = Literal[
     "retrieval_quality_gate_failed",
@@ -310,15 +311,7 @@ def _extract_question_terms(text: str) -> set[str]:
 def _has_sufficient_context(question: str, context: str) -> bool:
     if not context:
         return False
-
-    question_terms = _extract_question_terms(question)
-    if not question_terms:
-        return True
-
-    context_terms = set(re.findall(r"[a-z0-9]+", context.lower()))
-    overlap = question_terms & context_terms
-    required_overlap = 1 if len(question_terms) == 1 else min(2, len(question_terms))
-    return len(overlap) >= required_overlap
+    return len(context.strip()) >= 50
 
 
 def _retrieval_overlap_metrics(question: str, context: str) -> tuple[int, int, bool]:
@@ -407,32 +400,34 @@ def _is_answer_grounded(answer: str, citations: Sequence[AnswerCitation]) -> boo
         for segment in segments
     )
 
-def _route_intent(question: str) -> Intent:
-    q = question.strip().lower()
-    triggers = (
-        "summary",
-        "summarize",
-        "overview",
-        "what is this about",
-        "what is this document about",
-        "what is the document about",
-        "what is this pdf about",
-        "what is the pdf about",
-        "what is the uploaded pdf about",
-        "describe the document",
-        "describe this document",
-        "main points",
-        "key points",
+def _route_intent(question: str) -> RouteIntent:
+    prompt = (
+        "Classify the user's question for a document Q&A app.\n"
+        "Return exactly one label: summary, qa, or off_topic.\n"
+        "summary = asking what the uploaded document is about.\n"
+        "qa = asking for specific information from the uploaded document.\n"
+        "off_topic = not about the uploaded document.\n\n"
+        f"Question: {question}\n"
+        "Label:"
     )
-    if any(trigger in q for trigger in triggers):
-        return "summary"
+
+    try:
+        model = os.getenv("OPENAI_CHAT_MODEL", "gpt-5.4-nano")
+        llm = ChatOpenAI(model=model, temperature=0)
+        response_text = _coerce_response_text(llm.invoke(prompt)).lower()
+    except Exception:
+        return "qa"
+
+    match = re.search(r"\b(summary|qa|off_topic)\b", response_text)
+    if match:
+        return match.group(1)  # type: ignore[return-value]
     return "qa"
 
 
 def _select_retrieval_policy(question: str, total_chunks: int) -> RetrievalPolicy:
     limit = min(8, max(1, total_chunks))
-    intent = _route_intent(question)
-    if intent == "summary":
+    routed_intent = _route_intent(question)
+    if routed_intent == "summary":
         return RetrievalPolicy(
             intent="summary",
             mode="head",

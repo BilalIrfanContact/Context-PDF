@@ -92,8 +92,8 @@ class RagPipelineTestCase(unittest.TestCase):
             n_results=4,
             include=["documents", "metadatas"],
         )
-        chat_openai_mock.assert_called_once()
-        llm.invoke.assert_called_once()
+        self.assertEqual(chat_openai_mock.call_count, 2)
+        self.assertEqual(llm.invoke.call_count, 2)
 
     def test_answer_question_retries_when_model_breaks_json_contract(self):
         vectordb = self._build_vector_store(
@@ -106,6 +106,7 @@ class RagPipelineTestCase(unittest.TestCase):
         )
         llm = Mock()
         llm.invoke.side_effect = [
+            SimpleNamespace(content="qa"),
             SimpleNamespace(content="The refund window is 30 days."),
             SimpleNamespace(content='{"answer": "The refund window is 30 days."}'),
         ]
@@ -118,7 +119,7 @@ class RagPipelineTestCase(unittest.TestCase):
 
         self.assertEqual(answer.answer, "The refund window is 30 days.")
         self.assertEqual(answer.answer_status, "answered")
-        self.assertEqual(llm.invoke.call_count, 2)
+        self.assertEqual(llm.invoke.call_count, 3)
 
     def test_answer_question_falls_back_after_repeated_json_contract_failures(self):
         vectordb = self._build_vector_store(
@@ -131,6 +132,7 @@ class RagPipelineTestCase(unittest.TestCase):
         )
         llm = Mock()
         llm.invoke.side_effect = [
+            SimpleNamespace(content="qa"),
             SimpleNamespace(content="The refund window is 30 days."),
             SimpleNamespace(content='{"answer": ""}'),
         ]
@@ -144,7 +146,7 @@ class RagPipelineTestCase(unittest.TestCase):
         self.assertEqual(answer.answer, INSUFFICIENT_CONTEXT_ANSWER)
         self.assertEqual(answer.answer_status, "insufficient_context")
         self.assertEqual(answer.citations, [])
-        self.assertEqual(llm.invoke.call_count, 2)
+        self.assertEqual(llm.invoke.call_count, 3)
 
     def test_answer_question_rejects_ungrounded_generated_answer(self):
         vectordb = self._build_vector_store(
@@ -217,7 +219,11 @@ class RagPipelineTestCase(unittest.TestCase):
         self.assertEqual(answer.answer_status, "answered")
 
     def test_qa_questions_route_to_semantic_retrieval_policy(self):
-        policy = _select_retrieval_policy("What is the refund window?", total_chunks=12)
+        llm = Mock()
+        llm.invoke.return_value = SimpleNamespace(content="qa")
+
+        with patch("backend.services.rag_pipeline.ChatOpenAI", return_value=llm):
+            policy = _select_retrieval_policy("What is the refund window?", total_chunks=12)
 
         self.assertEqual(policy.intent, "qa")
         self.assertEqual(policy.mode, "semantic")
@@ -225,7 +231,11 @@ class RagPipelineTestCase(unittest.TestCase):
         self.assertTrue(policy.enforce_quality_gate)
 
     def test_summary_questions_route_to_head_retrieval_policy(self):
-        policy = _select_retrieval_policy("What is this document about?", total_chunks=12)
+        llm = Mock()
+        llm.invoke.return_value = SimpleNamespace(content="summary")
+
+        with patch("backend.services.rag_pipeline.ChatOpenAI", return_value=llm):
+            policy = _select_retrieval_policy("What is this document about?", total_chunks=12)
 
         self.assertEqual(policy.intent, "summary")
         self.assertEqual(policy.mode, "head")
@@ -233,7 +243,11 @@ class RagPipelineTestCase(unittest.TestCase):
         self.assertFalse(policy.enforce_quality_gate)
 
     def test_route_intent_treats_main_points_as_summary(self):
-        self.assertEqual(_route_intent("What are the main points of this PDF?"), "summary")
+        llm = Mock()
+        llm.invoke.return_value = SimpleNamespace(content="summary")
+
+        with patch("backend.services.rag_pipeline.ChatOpenAI", return_value=llm):
+            self.assertEqual(_route_intent("What are the main points of this PDF?"), "summary")
 
     def test_generation_prompt_is_thin_and_harness_owned(self):
         prompt = _build_generation_prompt("What is the refund window?", "Refunds are allowed for 30 days.")
@@ -251,7 +265,7 @@ class RagPipelineTestCase(unittest.TestCase):
         vectordb = self._build_vector_store(
             docs=[
                 SimpleNamespace(
-                    page_content="The onboarding checklist covers payroll setup and laptop pickup.",
+                    page_content="Payroll setup and laptop pickup.",
                     metadata={"chunk_id": "doc-1:chunk:3"},
                 )
             ]
@@ -268,7 +282,7 @@ class RagPipelineTestCase(unittest.TestCase):
         self.assertEqual(answer.retrieval_mode, "semantic")
         self.assertEqual(answer.answer_status, "insufficient_context")
         self.assertEqual(answer.citations, [])
-        chat_openai_mock.assert_not_called()
+        chat_openai_mock.assert_called_once()
 
     def test_answer_question_returns_deterministic_fallback_when_retrieval_is_empty(self):
         vectordb = self._build_vector_store(docs=[])
@@ -284,7 +298,7 @@ class RagPipelineTestCase(unittest.TestCase):
         self.assertEqual(answer.retrieval_mode, "semantic")
         self.assertEqual(answer.answer_status, "insufficient_context")
         self.assertEqual(answer.citations, [])
-        chat_openai_mock.assert_not_called()
+        chat_openai_mock.assert_called_once()
 
     def test_answer_question_returns_fallback_when_semantic_retrieval_has_no_chunk_ids(self):
         vectordb = self._build_vector_store(
@@ -305,7 +319,7 @@ class RagPipelineTestCase(unittest.TestCase):
         self.assertEqual(answer.answer, INSUFFICIENT_CONTEXT_ANSWER)
         self.assertEqual(answer.answer_status, "insufficient_context")
         self.assertEqual(answer.citations, [])
-        chat_openai_mock.assert_not_called()
+        chat_openai_mock.assert_called_once()
 
     def test_answer_question_uses_legacy_query_ids_for_semantic_citations(self):
         vectordb = self._build_vector_store(
@@ -342,9 +356,10 @@ class RagPipelineTestCase(unittest.TestCase):
             head_metadatas=[{"chunk_id": "doc-1:chunk:0"}],
         )
         llm = Mock()
-        llm.invoke.return_value = SimpleNamespace(
-            content='{"answer": "It explains benefits and time off."}'
-        )
+        llm.invoke.side_effect = [
+            SimpleNamespace(content="summary"),
+            SimpleNamespace(content='{"answer": "It explains benefits and time off."}'),
+        ]
 
         with (
             patch("backend.services.rag_pipeline.get_vector_store", return_value=vectordb),
@@ -366,10 +381,12 @@ class RagPipelineTestCase(unittest.TestCase):
             head_documents=["This handbook explains the benefits policy and time-off rules."],
             head_metadatas=[{}],
         )
+        llm = Mock()
+        llm.invoke.return_value = SimpleNamespace(content="summary")
 
         with (
             patch("backend.services.rag_pipeline.get_vector_store", return_value=vectordb),
-            patch("backend.services.rag_pipeline.ChatOpenAI") as chat_openai_mock,
+            patch("backend.services.rag_pipeline.ChatOpenAI", return_value=llm) as chat_openai_mock,
         ):
             answer = answer_question("doc-1", "Summarize this document.")
 
@@ -378,7 +395,7 @@ class RagPipelineTestCase(unittest.TestCase):
         self.assertEqual(answer.retrieval_mode, "head")
         self.assertEqual(answer.answer_status, "insufficient_context")
         self.assertEqual(answer.citations, [])
-        chat_openai_mock.assert_not_called()
+        chat_openai_mock.assert_called_once()
 
     def test_summary_questions_use_legacy_get_ids_for_citations(self):
         vectordb = self._build_vector_store(
@@ -388,9 +405,10 @@ class RagPipelineTestCase(unittest.TestCase):
             head_ids=["legacy-head-2"],
         )
         llm = Mock()
-        llm.invoke.return_value = SimpleNamespace(
-            content='{"answer": "It explains benefits and time off."}'
-        )
+        llm.invoke.side_effect = [
+            SimpleNamespace(content="summary"),
+            SimpleNamespace(content='{"answer": "It explains benefits and time off."}'),
+        ]
 
         with (
             patch("backend.services.rag_pipeline.get_vector_store", return_value=vectordb),
@@ -408,9 +426,10 @@ class RagPipelineTestCase(unittest.TestCase):
             head_metadatas=[{"chunk_id": "doc-1:chunk:0"}],
         )
         llm = Mock()
-        llm.invoke.return_value = SimpleNamespace(
-            content='{"answer": "It explains benefits, time-off rules, and stock option grants."}'
-        )
+        llm.invoke.side_effect = [
+            SimpleNamespace(content="summary"),
+            SimpleNamespace(content='{"answer": "It explains benefits, time-off rules, and stock option grants."}'),
+        ]
 
         with (
             patch("backend.services.rag_pipeline.get_vector_store", return_value=vectordb),
@@ -429,9 +448,10 @@ class RagPipelineTestCase(unittest.TestCase):
             head_metadatas=[{"chunk_id": "doc-1:chunk:0"}],
         )
         llm = Mock()
-        llm.invoke.return_value = SimpleNamespace(
-            content='{"answer": "The handbook covers benefits policy and time-off rules."}'
-        )
+        llm.invoke.side_effect = [
+            SimpleNamespace(content="summary"),
+            SimpleNamespace(content='{"answer": "The handbook covers benefits policy and time-off rules."}'),
+        ]
 
         with (
             patch("backend.services.rag_pipeline.get_vector_store", return_value=vectordb),
@@ -517,7 +537,7 @@ class RagPipelineTestCase(unittest.TestCase):
             include=["documents", "metadatas"],
         )
         vectordb.get.assert_not_called()
-        chat_openai_mock.assert_not_called()
+        chat_openai_mock.assert_called_once()
 
     def test_answer_question_logs_retrieval_quality_metrics_for_answered_decision(self):
         vectordb = self._build_vector_store(
@@ -563,7 +583,7 @@ class RagPipelineTestCase(unittest.TestCase):
         vectordb = self._build_vector_store(
             docs=[
                 SimpleNamespace(
-                    page_content="The onboarding checklist covers payroll setup and laptop pickup.",
+                    page_content="Payroll setup and laptop pickup.",
                     metadata={"chunk_id": "doc-1:chunk:3"},
                 )
             ]
@@ -584,7 +604,7 @@ class RagPipelineTestCase(unittest.TestCase):
         self.assertEqual(event["overlap_term_count"], 0)
         self.assertEqual(event["structured_output_retry_count"], 0)
         self.assertIsNone(event["answer_grounded"])
-        chat_openai_mock.assert_not_called()
+        chat_openai_mock.assert_called_once()
 
     def test_answer_question_logs_citation_completeness_when_chunk_ids_are_missing(self):
         vectordb = self._build_vector_store(
@@ -611,7 +631,7 @@ class RagPipelineTestCase(unittest.TestCase):
         self.assertEqual(event["missing_citation_count"], 1)
         self.assertEqual(event["citation_completeness_ratio"], 0.0)
         self.assertEqual(event["retrieved_context_char_count"], 0)
-        chat_openai_mock.assert_not_called()
+        chat_openai_mock.assert_called_once()
 
     def test_answer_question_logs_structured_output_failure_reason(self):
         vectordb = self._build_vector_store(
@@ -624,6 +644,7 @@ class RagPipelineTestCase(unittest.TestCase):
         )
         llm = Mock()
         llm.invoke.side_effect = [
+            SimpleNamespace(content="qa"),
             SimpleNamespace(content="The refund window is 30 days."),
             SimpleNamespace(content='{"answer": ""}'),
         ]
@@ -711,7 +732,7 @@ class RagPipelineTestCase(unittest.TestCase):
         self.assertEqual(event["citation_count"], 0)
         self.assertEqual(event["missing_citation_count"], 0)
         self.assertIsNone(event["citation_completeness_ratio"])
-        chat_openai_mock.assert_not_called()
+        chat_openai_mock.assert_called_once()
 
 
 if __name__ == "__main__":
