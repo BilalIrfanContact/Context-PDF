@@ -3,8 +3,12 @@ from __future__ import annotations
 import contextlib
 import sys
 from dataclasses import dataclass
-import termios
 from typing import TextIO
+
+try:
+    import termios
+except ImportError:  # pragma: no cover - exercised by tests via patching
+    termios = None
 
 
 @dataclass(frozen=True)
@@ -58,7 +62,8 @@ class AskMyDocShell:
 
     def run(self) -> int:
         self._interactive_terminal = (
-            hasattr(self.input_stream, "isatty")
+            termios is not None
+            and hasattr(self.input_stream, "isatty")
             and hasattr(self.input_stream, "fileno")
             and hasattr(self.output_stream, "isatty")
             and self.input_stream.isatty()
@@ -224,7 +229,10 @@ class AskMyDocShell:
             description = self._description_for_entry_command(command)
             self._write_line(f"{indicator} {command:<7} {description}")
 
-        self._write_line("Use Up/Down and Enter to choose, or type a command directly.")
+        if self._interactive_terminal:
+            self._write_line("Use Up/Down and Enter to choose, or type a command directly.")
+        else:
+            self._write_line("Type a command directly.")
         self._write(self._prompt() + typed_buffer)
 
     def _description_for_entry_command(self, command: str) -> str:
@@ -240,9 +248,19 @@ class AskMyDocShell:
         self._entry_feedback = self._entry_feedback[-12:]
 
     def _read_command(self) -> str | None:
+        if not self._interactive_terminal:
+            return self._read_line_command()
+
         if isinstance(self.state, EntryState):
             return self._read_entry_command()
         return self._read_text_command()
+
+    def _read_line_command(self) -> str | None:
+        raw_line = self.input_stream.readline()
+        if raw_line == "":
+            return None
+
+        return raw_line.rstrip("\r\n")
 
     def _read_entry_command(self) -> str | None:
         buffer = ""
