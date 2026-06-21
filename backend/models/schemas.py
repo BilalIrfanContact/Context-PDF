@@ -21,6 +21,7 @@ class UploadErrorDetail(BaseModel):
     failure_stage: Literal["validation", "indexing", "storage", "metadata"]
     reason_code: Literal[
         "invalid_file_type",
+        "unreadable_document",
         "no_extractable_text",
         "no_usable_chunks",
         "indexing_failed",

@@ -24,6 +24,7 @@ UploadCleanupStatus = Literal["not-needed", "completed", "failed"]
 UploadLifecycleStatus = Literal["completed", "rejected", "failed"]
 UploadReasonCode = Literal[
     "invalid_file_type",
+    "unreadable_document",
     "no_extractable_text",
     "no_usable_chunks",
     "indexing_failed",
@@ -197,7 +198,16 @@ async def upload_document(file: UploadFile, user_id: str) -> UploadLifecycleResu
         )
 
     data = await file.read()
-    text = upload_kind.extract_text(data)
+    try:
+        text = upload_kind.extract_text(data)
+    except Exception:
+        return UploadLifecycleResult(
+            status="rejected",
+            http_status=400,
+            detail=f"The {upload_kind.label} file could not be read.",
+            failure_stage="validation",
+            reason_code="unreadable_document",
+        )
 
     if not text:
         return UploadLifecycleResult(

@@ -311,6 +311,49 @@ class DocumentLifecycleHttpIntegrationTestCase(unittest.IsolatedAsyncioTestCase)
             },
         )
 
+    async def test_upload_endpoint_rejects_unreadable_pdf_files(self):
+        boundary = "boundary123"
+        body = _multipart_request_body(
+            field_name="file",
+            filename="broken.pdf",
+            content_type="application/octet-stream",
+            payload=b"not-a-real-pdf",
+            boundary=boundary,
+        )
+
+        with patch(
+            "backend.services.document_lifecycle.extract_text_from_pdf",
+            side_effect=ValueError("Could not parse PDF"),
+        ):
+            status, headers, response_body = await _request_asgi(
+                self.app,
+                method="POST",
+                path="/upload",
+                body=body,
+                headers=[
+                    (
+                        b"content-type",
+                        f"multipart/form-data; boundary={boundary}".encode("utf-8"),
+                    ),
+                    (b"content-length", str(len(body)).encode("utf-8")),
+                ],
+            )
+
+        self.assertEqual(status, 400)
+        self.assertEqual(headers["content-type"], "application/json")
+        self.assertEqual(
+            json.loads(response_body),
+            {
+                "detail": {
+                    "message": "The PDF file could not be read.",
+                    "lifecycle_status": "rejected",
+                    "failure_stage": "validation",
+                    "reason_code": "unreadable_document",
+                    "cleanup_status": "not-needed",
+                }
+            },
+        )
+
     async def test_delete_endpoint_returns_deleted_contract_on_success(self):
         with (
             patch(

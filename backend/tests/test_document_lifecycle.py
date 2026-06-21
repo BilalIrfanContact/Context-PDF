@@ -205,6 +205,30 @@ class DocumentLifecycleTestCase(unittest.IsolatedAsyncioTestCase):
         build_vector_store_mock.assert_not_called()
         upload_file_to_storage_mock.assert_not_called()
 
+    async def test_upload_document_rejects_unreadable_pdf_files(self):
+        file = AsyncMock()
+        file.content_type = "application/octet-stream"
+        file.filename = "broken.pdf"
+        file.read.return_value = b"not-a-real-pdf"
+
+        with (
+            patch(
+                "backend.services.document_lifecycle.extract_text_from_pdf",
+                side_effect=ValueError("Could not parse PDF"),
+            ),
+            patch("backend.services.document_lifecycle.build_vector_store") as build_vector_store_mock,
+            patch("backend.services.document_lifecycle.upload_file_to_storage") as upload_file_to_storage_mock,
+        ):
+            result = await upload_document(file=file, user_id="user-a")
+
+        self.assertEqual(result.status, "rejected")
+        self.assertEqual(result.failure_stage, "validation")
+        self.assertEqual(result.reason_code, "unreadable_document")
+        self.assertEqual(result.http_status, 400)
+        self.assertEqual(result.detail, "The PDF file could not be read.")
+        build_vector_store_mock.assert_not_called()
+        upload_file_to_storage_mock.assert_not_called()
+
     async def test_delete_document_runs_through_single_lifecycle_path(self):
         call_order: list[str] = []
 
