@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { UploadFlowError, uploadPdf } from "../lib/api";
+import { isSupportedUploadFile, UPLOAD_FILE_ACCEPT } from "../lib/uploadValidation";
 import type { UploadBootstrapResult } from "./home/types";
 
 type PDFUploaderProps = {
@@ -44,8 +45,8 @@ export default function PDFUploader({
   const handleFileChange = async (file: File | null) => {
     if (!file) return;
 
-    if (file.type !== "application/pdf") {
-      setStatus("Please select a valid PDF file.");
+    if (!isSupportedUploadFile(file)) {
+      setStatus("Please select a valid PDF or Markdown file.");
       setStage("error");
       return;
     }
@@ -55,7 +56,7 @@ export default function PDFUploader({
       setStage("uploading");
       const nextFileInfo = { name: file.name, size: formatBytes(file.size) };
       setFileInfo(nextFileInfo);
-      setStatus("Uploading your PDF...");
+      setStatus("Uploading your document...");
 
       const response = await uploadPdf(file);
       setStage("finalizing");
@@ -77,7 +78,7 @@ export default function PDFUploader({
 
       if (uploadResult.status === "ready") {
         setStage("ready");
-        setStatus("PDF indexed and ready for questions.");
+        setStatus("Document indexed and ready for questions.");
         return;
       }
 
@@ -107,13 +108,13 @@ export default function PDFUploader({
           type="button"
           className="upload-input-bar"
           onClick={() => fileInputRef.current?.click()}
-          aria-label="Choose PDF file"
+          aria-label="Choose document file"
         >
           <div className="upload-input-icon">
             <UploadIcon />
           </div>
           <div className="upload-input-content">
-            <span className="upload-input-text">Choose a PDF to analyze...</span>
+            <span className="upload-input-text">Choose a PDF or Markdown file to analyze...</span>
           </div>
         </button>
 
@@ -162,7 +163,7 @@ export default function PDFUploader({
       <input
         ref={fileInputRef}
         type="file"
-        accept="application/pdf"
+        accept={UPLOAD_FILE_ACCEPT}
         style={{display: 'none'}}
         onChange={(event) => handleFileChange(event.target.files?.[0] ?? null)}
       />

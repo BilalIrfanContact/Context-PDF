@@ -74,7 +74,7 @@ function parseUploadReasonCode(
   }
 
   if (detail.failure_stage === "validation" && typeof detail.message === "string") {
-    if (detail.message.includes("Only PDF files are supported")) {
+    if (detail.message.includes("Only PDF and Markdown files are supported")) {
       return "invalid_file_type";
     }
 
