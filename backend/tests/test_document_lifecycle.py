@@ -17,7 +17,7 @@ class DocumentLifecycleTestCase(unittest.IsolatedAsyncioTestCase):
             patch("backend.services.document_lifecycle.chunk_text", return_value=["alpha", "beta"]),
             patch("backend.services.document_lifecycle.build_vector_store", return_value=2),
             patch(
-                "backend.services.document_lifecycle.upload_pdf_to_storage",
+                "backend.services.document_lifecycle.upload_file_to_storage",
                 return_value="documents/user-a/doc-1/report.pdf",
             ),
             patch("backend.services.document_lifecycle.insert_document") as insert_document_mock,
@@ -49,8 +49,8 @@ class DocumentLifecycleTestCase(unittest.IsolatedAsyncioTestCase):
             patch("backend.services.document_lifecycle.chunk_text", return_value=["alpha", "beta"]),
             patch("backend.services.document_lifecycle.build_vector_store", return_value=2),
             patch(
-                "backend.services.document_lifecycle.upload_pdf_to_storage",
-                side_effect=PersistenceError("Failed to upload PDF to Supabase Storage"),
+                "backend.services.document_lifecycle.upload_file_to_storage",
+                side_effect=PersistenceError("Failed to upload document to Supabase Storage"),
             ),
             patch("backend.services.document_lifecycle.delete_vector_store") as delete_vector_store_mock,
             patch("backend.services.document_lifecycle.uuid.uuid4", return_value="doc-1"),
@@ -61,11 +61,11 @@ class DocumentLifecycleTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.failure_stage, "storage")
         self.assertEqual(result.http_status, 502)
         self.assertEqual(result.cleanup_status, "completed")
-        self.assertEqual(result.detail, "Failed to upload PDF to Supabase Storage")
+        self.assertEqual(result.detail, "Failed to upload document to Supabase Storage")
         self.assertEqual(
             result.to_error_detail(),
             {
-                "message": "Failed to upload PDF to Supabase Storage",
+                "message": "Failed to upload document to Supabase Storage",
                 "lifecycle_status": "failed",
                 "failure_stage": "storage",
                 "reason_code": "storage_upload_failed",
@@ -111,7 +111,7 @@ class DocumentLifecycleTestCase(unittest.IsolatedAsyncioTestCase):
             patch("backend.services.document_lifecycle.chunk_text", return_value=["alpha", "beta"]),
             patch("backend.services.document_lifecycle.build_vector_store", return_value=2),
             patch(
-                "backend.services.document_lifecycle.upload_pdf_to_storage",
+                "backend.services.document_lifecycle.upload_file_to_storage",
                 return_value="documents/user-a/doc-1/report.pdf",
             ),
             patch(
@@ -148,9 +148,62 @@ class DocumentLifecycleTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.failure_stage, "validation")
         self.assertEqual(result.reason_code, "invalid_file_type")
         self.assertEqual(result.http_status, 400)
-        self.assertEqual(result.detail, "Only PDF files are supported.")
+        self.assertEqual(result.detail, "Only PDF and Markdown files are supported.")
         extract_text_mock.assert_not_called()
         build_vector_store_mock.assert_not_called()
+
+    async def test_upload_document_accepts_markdown_by_extension_and_stores_markdown_content_type(self):
+        file = AsyncMock()
+        file.content_type = "application/octet-stream"
+        file.filename = "notes.md"
+        file.read.return_value = b"# Notes\n\nalpha beta"
+
+        with (
+            patch("backend.services.document_lifecycle.chunk_text", return_value=["alpha", "beta"]),
+            patch("backend.services.document_lifecycle.build_vector_store", return_value=2),
+            patch(
+                "backend.services.document_lifecycle.upload_file_to_storage",
+                return_value="documents/user-a/doc-1/notes.md",
+            ) as upload_file_to_storage_mock,
+            patch("backend.services.document_lifecycle.insert_document") as insert_document_mock,
+            patch("backend.services.document_lifecycle.uuid.uuid4", return_value="doc-1"),
+        ):
+            result = await upload_document(file=file, user_id="user-a")
+
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(result.document_id, "doc-1")
+        upload_file_to_storage_mock.assert_called_once_with(
+            user_id="user-a",
+            document_id="doc-1",
+            filename="notes.md",
+            data=b"# Notes\n\nalpha beta",
+            content_type="text/markdown",
+        )
+        insert_document_mock.assert_called_once_with(
+            document_id="doc-1",
+            user_id="user-a",
+            filename="notes.md",
+            storage_url="documents/user-a/doc-1/notes.md",
+        )
+
+    async def test_upload_document_rejects_empty_markdown_files(self):
+        file = AsyncMock()
+        file.content_type = "text/markdown"
+        file.filename = "empty.md"
+        file.read.return_value = b""
+
+        with (
+            patch("backend.services.document_lifecycle.build_vector_store") as build_vector_store_mock,
+            patch("backend.services.document_lifecycle.upload_file_to_storage") as upload_file_to_storage_mock,
+        ):
+            result = await upload_document(file=file, user_id="user-a")
+
+        self.assertEqual(result.status, "rejected")
+        self.assertEqual(result.failure_stage, "validation")
+        self.assertEqual(result.reason_code, "no_extractable_text")
+        self.assertEqual(result.detail, "No extractable text found in the Markdown file.")
+        build_vector_store_mock.assert_not_called()
+        upload_file_to_storage_mock.assert_not_called()
 
     async def test_delete_document_runs_through_single_lifecycle_path(self):
         call_order: list[str] = []
@@ -233,7 +286,7 @@ class DocumentLifecycleTestCase(unittest.IsolatedAsyncioTestCase):
             patch("backend.services.document_lifecycle.delete_vector_store"),
             patch(
                 "backend.services.document_lifecycle.delete_storage_object",
-                side_effect=PersistenceError("Failed to delete PDF from Supabase Storage"),
+                side_effect=PersistenceError("Failed to delete document from Supabase Storage"),
             ),
         ):
             result = delete_document(
@@ -249,7 +302,7 @@ class DocumentLifecycleTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             result.to_error_detail(),
             {
-                "message": "Failed to delete PDF from Supabase Storage",
+                "message": "Failed to delete document from Supabase Storage",
                 "lifecycle_status": "failed",
                 "failure_stage": "storage",
                 "reason_code": "storage_delete_failed",

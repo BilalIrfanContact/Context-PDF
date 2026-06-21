@@ -303,7 +303,16 @@ class InMemoryAppState:
 
         raise AssertionError(f"Unexpected table: {table}")
 
-    def upload_storage_object(self, user_id: str, document_id: str, filename: str, data: bytes) -> str:
+    def upload_storage_object(
+        self,
+        *,
+        user_id: str,
+        document_id: str,
+        filename: str,
+        data: bytes,
+        content_type: str,
+    ) -> str:
+        del data, content_type
         self.upload_counter += 1
         storage_url = f"documents/{user_id}/{document_id}/{filename}"
         self.storage_uploaded.append(storage_url)
@@ -413,7 +422,7 @@ class AppIntegrationTestCase(unittest.IsolatedAsyncioTestCase):
         )
         self.exit_stack.enter_context(
             patch(
-                "backend.services.document_lifecycle.upload_pdf_to_storage",
+                "backend.services.document_lifecycle.upload_file_to_storage",
                 side_effect=self.state.upload_storage_object,
             )
         )

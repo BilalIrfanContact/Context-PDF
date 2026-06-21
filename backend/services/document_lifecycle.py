@@ -1,10 +1,12 @@
 import uuid
 from dataclasses import dataclass
-from typing import Literal
+from os.path import splitext
+from typing import Callable, Literal
 
 from fastapi import HTTPException, UploadFile
 
 from ..models.schemas import DeleteDocumentResponse, UploadResponse
+from .markdown_extractor import extract_text_from_markdown
 from .pdf_extractor import extract_text_from_pdf
 from .persistence import PersistenceError
 from .persistence.conversations_repository import (
@@ -13,7 +15,7 @@ from .persistence.conversations_repository import (
 )
 from .persistence.documents_repository import delete_document_record, insert_document
 from .persistence.messages_repository import delete_messages_for_conversation
-from .persistence.storage_repository import delete_storage_object, upload_pdf_to_storage
+from .persistence.storage_repository import delete_storage_object, upload_file_to_storage
 from .text_chunker import chunk_text
 from .vector_store import build_vector_store, delete_vector_store
 
@@ -116,6 +118,38 @@ class DeleteLifecycleResult:
         }
 
 
+@dataclass(frozen=True)
+class SupportedUploadKind:
+    label: str
+    content_type: str
+    fallback_filename: str
+    extract_text: Callable[[bytes], str]
+
+
+def _resolve_upload_kind(file: UploadFile) -> SupportedUploadKind | None:
+    filename = (file.filename or "").lower()
+    extension = splitext(filename)[1]
+    content_type = (file.content_type or "").lower()
+
+    if content_type == "application/pdf" or extension == ".pdf":
+        return SupportedUploadKind(
+            label="PDF",
+            content_type="application/pdf",
+            fallback_filename="document.pdf",
+            extract_text=extract_text_from_pdf,
+        )
+
+    if content_type == "text/markdown" or extension == ".md":
+        return SupportedUploadKind(
+            label="Markdown",
+            content_type="text/markdown",
+            fallback_filename="document.md",
+            extract_text=extract_text_from_markdown,
+        )
+
+    return None
+
+
 def _cleanup_failed_upload(document_id: str, storage_url: str | None = None) -> UploadCleanupStatus:
     cleanup_failed = False
 
@@ -152,23 +186,24 @@ def _delete_failure(
 
 
 async def upload_document(file: UploadFile, user_id: str) -> UploadLifecycleResult:
-    if file.content_type not in {"application/pdf"}:
+    upload_kind = _resolve_upload_kind(file)
+    if upload_kind is None:
         return UploadLifecycleResult(
             status="rejected",
             http_status=400,
-            detail="Only PDF files are supported.",
+            detail="Only PDF and Markdown files are supported.",
             failure_stage="validation",
             reason_code="invalid_file_type",
         )
 
     data = await file.read()
-    text = extract_text_from_pdf(data)
+    text = upload_kind.extract_text(data)
 
     if not text:
         return UploadLifecycleResult(
             status="rejected",
             http_status=400,
-            detail="No extractable text found in the PDF.",
+            detail=f"No extractable text found in the {upload_kind.label} file.",
             failure_stage="validation",
             reason_code="no_extractable_text",
         )
@@ -178,7 +213,7 @@ async def upload_document(file: UploadFile, user_id: str) -> UploadLifecycleResu
         return UploadLifecycleResult(
             status="rejected",
             http_status=400,
-            detail="No usable text chunks were created from the PDF.",
+            detail=f"No usable text chunks were created from the {upload_kind.label} file.",
             failure_stage="validation",
             reason_code="no_usable_chunks",
         )
@@ -220,14 +255,15 @@ async def upload_document(file: UploadFile, user_id: str) -> UploadLifecycleResu
             cleanup_status=cleanup_status,
         )
 
-    filename = file.filename or "document.pdf"
+    filename = file.filename or upload_kind.fallback_filename
 
     try:
-        storage_url = upload_pdf_to_storage(
+        storage_url = upload_file_to_storage(
             user_id=user_id,
             document_id=document_id,
             filename=filename,
             data=data,
+            content_type=upload_kind.content_type,
         )
     except PersistenceError as exc:
         cleanup_status = _cleanup_failed_upload(document_id)
