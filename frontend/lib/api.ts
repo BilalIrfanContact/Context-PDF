@@ -48,6 +48,7 @@ function parseUploadReasonCode(
 ): UploadReasonCode | null {
   if (
     detail.reason_code === "invalid_file_type" ||
+    detail.reason_code === "unreadable_document" ||
     detail.reason_code === "no_extractable_text" ||
     detail.reason_code === "no_usable_chunks" ||
     detail.reason_code === "indexing_failed" ||
@@ -74,8 +75,12 @@ function parseUploadReasonCode(
   }
 
   if (detail.failure_stage === "validation" && typeof detail.message === "string") {
-    if (detail.message.includes("Only PDF files are supported")) {
+    if (detail.message.includes("Only PDF and Markdown files are supported")) {
       return "invalid_file_type";
+    }
+
+    if (detail.message.includes("could not be read")) {
+      return "unreadable_document";
     }
 
     if (detail.message.includes("No extractable text found")) {

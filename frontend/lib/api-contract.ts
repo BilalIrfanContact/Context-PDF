@@ -98,7 +98,7 @@ export interface UploadErrorDetail {
   "failure_stage": "validation" | "indexing" | "storage" | "metadata";
   "lifecycle_status": "failed" | "rejected";
   "message": string;
-  "reason_code": "invalid_file_type" | "no_extractable_text" | "no_usable_chunks" | "indexing_failed" | "no_chunks_stored" | "storage_upload_failed" | "metadata_persist_failed";
+  "reason_code": "invalid_file_type" | "unreadable_document" | "no_extractable_text" | "no_usable_chunks" | "indexing_failed" | "no_chunks_stored" | "storage_upload_failed" | "metadata_persist_failed";
 }
 
 export interface UploadErrorResponse {

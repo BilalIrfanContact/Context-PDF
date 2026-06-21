@@ -160,7 +160,7 @@ class AuthorizationRoutesTestCase(unittest.IsolatedAsyncioTestCase):
         failed_result.to_http_exception.return_value = HTTPException(
             status_code=502,
             detail={
-                "message": "Failed to delete PDF from Supabase Storage",
+                "message": "Failed to delete document from Supabase Storage",
                 "lifecycle_status": "failed",
                 "failure_stage": "storage",
                 "reason_code": "storage_delete_failed",
@@ -185,7 +185,7 @@ class AuthorizationRoutesTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             exc.exception.detail,
             {
-                "message": "Failed to delete PDF from Supabase Storage",
+                "message": "Failed to delete document from Supabase Storage",
                 "lifecycle_status": "failed",
                 "failure_stage": "storage",
                 "reason_code": "storage_delete_failed",
